@@ -1,0 +1,635 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DataAnalyze</title>
+  <style>
+    :root {
+      --bg1:#eef4ff;
+      --bg2:#f8fbff;
+      --card:#ffffff;
+      --line:#d8e2f0;
+      --text:#172230;
+      --muted:#66768c;
+      --brand:#145df5;
+      --brand2:#0d46b6;
+      --danger:#d93025;
+      --shadow:0 12px 28px rgba(24, 54, 108, 0.10);
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+      color:var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(20,93,245,.12), transparent 26%),
+        radial-gradient(circle at top right, rgba(255,122,24,.10), transparent 24%),
+        linear-gradient(135deg,var(--bg1),var(--bg2));
+      min-height:100vh;
+    }
+    .wrap{max-width:1380px;margin:0 auto;padding:22px 16px 28px}
+    .hero{display:flex;justify-content:space-between;align-items:end;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+    .hero h1{margin:0;font-size:30px;letter-spacing:.4px}
+    .hero p{margin:8px 0 0;color:var(--muted);font-size:13px;max-width:820px;line-height:1.6}
+    .top-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .layout{display:grid;grid-template-columns:320px minmax(0,1fr) 340px;gap:16px}
+    .card{
+      background:var(--card);
+      border:1px solid rgba(216,226,240,.95);
+      border-radius:18px;
+      padding:14px;
+      box-shadow:var(--shadow);
+      backdrop-filter: blur(6px);
+      min-width:0;
+    }
+    .card h3{margin:0;font-size:15px;letter-spacing:.2px}
+    .row{margin-bottom:12px}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+    input,textarea,button,select{
+      width:100%;
+      border-radius:12px;
+      border:1px solid var(--line);
+      padding:10px 12px;
+      font-size:14px;
+      outline:none;
+    }
+    input:focus,textarea:focus,select:focus{border-color:#9ec0ff;box-shadow:0 0 0 3px rgba(20,93,245,.12)}
+    textarea{min-height:130px;resize:vertical;line-height:1.5}
+    button{cursor:pointer;border:0;background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;font-weight:700}
+    button:hover{filter:brightness(1.03)}
+    .btn2{background:#eff5ff;color:#173e8f;border:1px solid #d2e2ff}
+    .btn2:hover{background:#e1ecff}
+    .btn-sm{width:auto;padding:8px 10px;font-size:12px;border-radius:10px}
+    .status{font-size:12px;color:var(--muted);min-height:18px;white-space:pre-wrap;margin-top:6px}
+    .status.error{color:var(--danger)}
+    .pill{display:inline-flex;align-items:center;border:1px solid #cfe0ff;background:#eef4ff;color:#1a4f99;border-radius:999px;padding:4px 10px;font-size:12px;margin:0 6px 6px 0}
+    .chatbox{height:66vh;overflow:auto;padding-right:2px}
+    .msg{border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px;background:#fff}
+    .role{font-size:12px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px}
+    pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:Consolas,Menlo,monospace;font-size:12.5px;line-height:1.55}
+    .links a,.list a{display:inline-block;margin:0 8px 8px 0;color:#0a58ca;text-decoration:none;font-size:13px}
+    .links a:hover,.list a:hover{text-decoration:underline}
+    .list{max-height:65vh;overflow:auto;padding-right:2px}
+    .history-item{border:1px solid var(--line);border-radius:14px;padding:10px;margin-bottom:10px;background:linear-gradient(180deg,#fff,#fbfdff);cursor:pointer;transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease}
+    .history-item:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(16,50,110,.08);border-color:#bcd1f0}
+    .history-item.active{border-color:#90b2ff;box-shadow:0 0 0 3px rgba(20,93,245,.10)}
+    .history-item .meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted);margin-bottom:6px}
+    .history-item .summary{font-size:13px;line-height:1.45;font-weight:600;margin-bottom:8px}
+    .history-item .tags{display:flex;flex-wrap:wrap;gap:6px}
+    .tag{font-size:11px;border-radius:999px;padding:3px 8px;background:#eef4ff;color:#1b4d8f;border:1px solid #d2e0fb}
+    .header-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+    .header-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .small{font-size:12px;color:var(--muted)}
+    .plus-btn{width:44px;height:44px;min-width:44px;border-radius:999px;padding:0;font-size:28px;line-height:44px;text-align:center;font-weight:700}
+    .upload-hint{font-size:12px;color:var(--muted)}
+    .chat-file-bar{margin-bottom:8px;display:flex;flex-wrap:wrap;gap:6px}
+    .chat-file-pill{display:inline-flex;align-items:center;border:1px solid #cfe0ff;background:#eef4ff;color:#1a4f99;border-radius:999px;padding:3px 10px;font-size:12px}
+    .page-nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .page-btn{width:auto;padding:8px 12px;border-radius:999px}
+    .page-btn.active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0}
+    .page{display:none}
+    .page.active{display:block}
+    .report-preview{max-height:65vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:12px;background:#fff}
+    .note-box{border:1px solid #dbe6f7;background:linear-gradient(180deg,#f8fbff,#f3f8ff);border-radius:12px;padding:10px}
+    .note-item{font-size:12px;line-height:1.7;color:#3c4a63;padding-left:10px;position:relative;margin-bottom:4px}
+    .note-item:last-child{margin-bottom:0}
+    .note-item:before{content:"";position:absolute;left:0;top:9px;width:4px;height:4px;border-radius:50%;background:#5d83e8}
+    @media (max-width:1100px){.layout{grid-template-columns:1fr}.chatbox{height:52vh}.list{max-height:unset}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>DataAnalyze</h1>
+        <p data-i18n="hero_desc">上传文件、对话分析、查看历史、下载报告。</p>
+        <div class="page-nav">
+          <button class="btn2 btn-sm page-btn active" data-page="chat" data-i18n="nav_chat">对话</button>
+          <button class="btn2 btn-sm page-btn" data-page="history" data-i18n="nav_history">历史</button>
+          <button class="btn2 btn-sm page-btn" data-page="reports" data-i18n="nav_reports">报告</button>
+          <button class="btn2 btn-sm page-btn" data-page="settings" data-i18n="nav_settings">连接配置</button>
+        </div>
+      </div>
+      <div class="top-actions">
+        <select id="langSelect" class="btn-sm" style="width:auto">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <select id="themeSelect" class="btn-sm" style="width:auto">
+          <option value="default">默认蓝</option>
+          <option value="ocean">海洋青</option>
+          <option value="sunset">日落橙</option>
+        </select>
+        
+      </div>
+    </div>
+
+    <div id="page-chat" class="page active">
+      <div class="layout">
+        <div class="card">
+          <h3 data-i18n="chat_side_title">会话信息</h3>
+          <div class="row"><label data-i18n="label_owner">用户ID</label><input id="ownerIdDisplay" readonly/></div>
+          <div class="row"><label data-i18n="label_thread">当前线程</label><input id="threadId" placeholder="thread-..."/></div>
+          <div class="row"><button class="btn2" id="btnNewSession" data-i18n="btn_new_session">新建会话</button></div>
+          <div class="row"><label data-i18n="label_file_ids">已上传 file_id</label><div id="fileIds"></div></div>
+        </div>
+
+        <div class="card">
+          <div class="header-bar">
+            <h3 data-i18n="chat_title">对话</h3>
+            <div class="small" data-i18n="chat_tip">仅展示 Answer</div>
+          </div>
+          <div id="chatbox" class="chatbox"></div>
+          <div id="chatFileBar" class="chat-file-bar"></div>
+          <div id="chatUploadStatus" class="status"></div>
+          <input id="chatFileInput" type="file" style="display:none" />
+          <div class="row"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px;"><label data-i18n="label_user_msg" style="margin-bottom:0;">用户消息</label><div style="display:flex;align-items:center;gap:8px;"><span class="upload-hint" data-i18n="chat_upload_hint">点击 + 上传文件</span><button class="btn2 btn-sm plus-btn" id="btnPlusUpload" title="上传文件">+</button></div></div><textarea id="userInput" placeholder="请输入你的分析需求..."></textarea></div>
+          <div class="row"><button id="btnSend" data-i18n="btn_send">发送</button><div id="chatStatus" class="status"></div></div>
+        </div>
+
+        <div class="card">
+          <div class="header-bar">
+            <h3 data-i18n="quick_ops">快捷操作</h3>
+            
+          </div>
+          <div class="row"><button class="btn2" id="btnJumpHistory" data-i18n="btn_go_history">进入历史页</button></div>
+          <div class="row"><button class="btn2" id="btnJumpReports" data-i18n="btn_go_reports">进入报告页</button></div>
+          <div class="row"><button class="btn2" id="btnJumpSettings" data-i18n="btn_go_settings">进入连接配置</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-history" class="page">
+      <div class="layout">
+        <div class="card" style="grid-column:1 / 3;">
+          <div class="header-bar">
+            <h3 data-i18n="history_title">最近会话（历史）</h3>
+            <div class="header-actions">
+              <button class="btn2 btn-sm" id="btnLoadSessions" data-i18n="btn_refresh_sessions">刷新会话</button>
+            </div>
+          </div>
+          <div id="sessionList" class="list"></div>
+        </div>
+        <div class="card">
+          <h3 data-i18n="history_detail">会话消息（Answer视图）</h3>
+          <div id="historyConversation" class="chatbox"></div>
+        </div>
+        <div class="card">
+          <h3 data-i18n="history_note">说明</h3>
+          <p class="small" data-i18n="history_note_text">摘要仅显示关键信息，完整推理与执行过程保存在后端 message 文档中。</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-reports" class="page">
+      <div class="layout">
+        <div class="card">
+          <div class="header-bar">
+            <h3 data-i18n="report_title">报告文件</h3>
+            <button class="btn2 btn-sm" id="btnLoadReports" data-i18n="btn_refresh_reports">刷新报告</button>
+          </div>
+          <div id="reportList" class="list"></div>
+        </div>
+        <div class="card" style="grid-column:2 / 4;">
+          <div class="header-bar">
+            <h3 data-i18n="report_preview">报告预览</h3>
+            <div class="header-actions">
+              <button class="btn2 btn-sm" id="btnExportMd" data-i18n="btn_export_md">导出 Markdown</button>
+            </div>
+          </div>
+          <div id="reportPreview" class="report-preview" data-i18n="report_preview_empty">请选择左侧报告进行预览</div>
+          <div id="reportStatus" class="status"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-settings" class="page">
+      <div class="layout">
+        <div class="card" style="grid-column:1 / 3;">
+          <h3 data-i18n="settings_conn">连接配置</h3>
+          <div class="row"><label data-i18n="label_service_url">服务 URL</label><input id="serviceUrl" value="http://localhost:8200"/></div>
+          <div class="row"><label data-i18n="label_model_name">模型名</label><input id="modelName" value="gpt-4.1-mini"/></div>
+          <div class="row"><label data-i18n="label_api_base">模型 API Base（可选）</label><input id="modelApiBase" placeholder="https://api.openai.com/v1"/></div>
+          <div class="row"><label data-i18n="label_api_key">模型 API Key（可选）</label><input id="modelApiKey" type="password" placeholder="sk-..."/></div>
+          <div class="row"><button class="btn2" id="btnSaveConfig" data-i18n="btn_save_config">保存配置到本地</button></div>
+          <div class="row"><button class="btn2" id="btnHealth" data-i18n="btn_health">检查服务状态</button><div id="healthStatus" class="status"></div></div>
+        </div>
+
+        <div class="card">
+          <h3 data-i18n="settings_note">使用说明</h3>
+          <div class="note-box">
+            <div class="note-item" data-i18n="settings_note_line1">上传入口在对话页“用户消息”旁的 + 按钮。</div>
+            <div class="note-item" data-i18n="settings_note_line2">连接配置仅影响当前浏览器本地会话。</div>
+            <div class="note-item" data-i18n="settings_note_line3">修改配置后建议先做一次健康检查。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const i18n = {
+      zh: {
+        hero_desc: "上传文件、对话分析、查看历史、下载报告。",
+        nav_chat: "对话", nav_history: "历史", nav_reports: "报告", nav_settings: "连接配置",
+        chat_side_title: "会话信息", label_owner: "用户ID", label_thread: "当前线程", btn_new_session: "新建会话", label_file_ids: "已上传 file_id",
+        chat_title: "对话", chat_tip: "仅展示 Answer", chat_upload_hint: "点击 + 上传文件", label_user_msg: "用户消息", btn_send: "发送",
+        quick_ops: "导航", btn_go_history: "进入历史页", btn_go_reports: "进入报告页", btn_go_settings: "进入连接配置",
+        history_title: "最近会话（历史）", btn_refresh_sessions: "刷新会话", history_detail: "会话消息（Answer视图）", history_note: "说明", history_note_text: "摘要仅显示关键信息，完整推理与执行过程保存在后端 message 文档中。",
+        report_title: "报告文件", btn_refresh_reports: "刷新报告", report_preview: "报告预览", btn_export_md: "导出 Markdown", report_preview_empty: "请选择左侧报告进行预览",
+        settings_conn: "连接配置", label_service_url: "服务 URL", label_model_name: "模型名", label_api_base: "模型 API Base（可选）", label_api_key: "模型 API Key（可选）",
+        btn_save_config: "保存配置到本地", btn_health: "检查服务状态",
+        settings_note: "使用说明", settings_note_line1: "上传入口在对话页“用户消息”旁的 + 按钮。", settings_note_line2: "连接配置仅影响当前浏览器本地会话。", settings_note_line3: "修改配置后建议先做一次健康检查。"
+      },
+      en: {
+        hero_desc: "Upload files, chat for analysis, review history, and download reports.",
+        nav_chat: "Chat", nav_history: "History", nav_reports: "Reports", nav_settings: "Connection",
+        chat_side_title: "Session Info", label_owner: "Owner ID", label_thread: "Current Thread", btn_new_session: "New Session", label_file_ids: "Uploaded file_id",
+        chat_title: "Chat", chat_tip: "Answer only in UI", chat_upload_hint: "Click + to upload file", label_user_msg: "User Message", btn_send: "Send",
+        quick_ops: "Navigation", btn_go_history: "Go History", btn_go_reports: "Go Reports", btn_go_settings: "Go Settings",
+        history_title: "Recent Sessions", btn_refresh_sessions: "Refresh Sessions", history_detail: "Messages (Answer View)", history_note: "Note", history_note_text: "Only key summary is shown; full analyze/code/execute/answer is stored in backend message files.",
+        report_title: "Report Files", btn_refresh_reports: "Refresh Reports", report_preview: "Report Preview", btn_export_md: "Export Markdown", report_preview_empty: "Select a report from the left panel",
+        settings_conn: "Connection Settings", label_service_url: "Service URL", label_model_name: "Model Name", label_api_base: "Model API Base (optional)", label_api_key: "Model API Key (optional)",
+        btn_save_config: "Save to local", btn_health: "Health Check",
+        settings_note: "Notes", settings_note_line1: "Use the + button beside User Message to upload files.", settings_note_line2: "Connection settings are stored only in this browser.", settings_note_line3: "Run a health check after changing settings."
+      }
+    };
+
+    const themeMap = {
+      default: { bg1: "#eef4ff", bg2: "#f8fbff", brand: "#145df5", brand2: "#0d46b6" },
+      ocean: { bg1: "#e9fbff", bg2: "#f5feff", brand: "#0b8fae", brand2: "#0b5d73" },
+      sunset: { bg1: "#fff3ea", bg2: "#fffaf5", brand: "#ea6a1f", brand2: "#b9480a" }
+    };
+
+    const state = { fileIds: [], threads: [], reports: [], reportText: "", reportName: "" };
+    const $ = (id) => document.getElementById(id);
+    const ownerIdKey = "da_owner_id";
+    const threadIdKey = "da_current_thread_id";
+
+    function getOrCreateOwnerId() {
+      let value = localStorage.getItem(ownerIdKey);
+      if (!value) {
+        value = (crypto.randomUUID && crypto.randomUUID()) || `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        localStorage.setItem(ownerIdKey, value);
+      }
+      return value;
+    }
+
+    const ownerId = getOrCreateOwnerId();
+
+    function setStatus(el, text, err = false) { el.textContent = text || ""; el.className = err ? "status error" : "status"; }
+    function normalizeBase() { return $("serviceUrl").value.trim().replace(/\/+$/, ""); }
+    function absUrl(u) { return /^https?:\/\//i.test(u) ? u : `${normalizeBase()}${u}`; }
+    function formatTime(ts) { return ts ? new Date(ts * 1000).toLocaleString() : "-"; }
+    function shortSummary(text) { const s = (text || "未命名会话").trim(); return s.length > 7 ? s.slice(0, 7) + "..." : s; }
+    function escapeHtml(s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+    function extractAnswerText(content) {
+      const match = String(content || "").match(/<Answer>([\s\S]*?)<\/Answer>/);
+      return match ? match[1].trim() : String(content || "").trim();
+    }
+
+    function applyI18n(lang) {
+      const dict = i18n[lang] || i18n.zh;
+      document.querySelectorAll("[data-i18n]").forEach(el => {
+        const key = el.getAttribute("data-i18n");
+        if (dict[key]) el.textContent = dict[key];
+      });
+      localStorage.setItem("da_lang", lang);
+    }
+
+    function applyTheme(name) {
+      const t = themeMap[name] || themeMap.default;
+      document.documentElement.style.setProperty("--bg1", t.bg1);
+      document.documentElement.style.setProperty("--bg2", t.bg2);
+      document.documentElement.style.setProperty("--brand", t.brand);
+      document.documentElement.style.setProperty("--brand2", t.brand2);
+      localStorage.setItem("da_theme", name);
+    }
+
+    function switchPage(page) {
+      document.querySelectorAll(".page").forEach(el => el.classList.remove("active"));
+      document.querySelectorAll(".page-btn").forEach(el => el.classList.remove("active"));
+      $(`page-${page}`).classList.add("active");
+      document.querySelector(`.page-btn[data-page='${page}']`)?.classList.add("active");
+    }
+
+    function renderFileIds() {
+      const render = (target, cls = "pill") => {
+        const el = $(target);
+        if (!el) return;
+        el.innerHTML = "";
+        if (!state.fileIds.length) { el.innerHTML = '<span class="small">暂无</span>'; return; }
+        state.fileIds.forEach(id => {
+          const s = document.createElement("span");
+          s.className = cls;
+          s.textContent = id;
+          el.appendChild(s);
+        });
+      };
+      render("fileIds", "pill");
+      
+      render("chatFileBar", "chat-file-pill");
+    }
+
+    function addMessage(role, content, links = [], targetId = "chatbox") {
+      const box = document.createElement("div"); box.className = "msg";
+      box.innerHTML = `<div class="role">${role}</div><pre>${escapeHtml(content || "")}</pre>`;
+      if (links.length) {
+        const l = document.createElement("div"); l.className = "links";
+        links.forEach(it => {
+          const a = document.createElement("a");
+          a.href = absUrl(it.url); a.target = "_blank"; a.textContent = it.name || it.url;
+          l.appendChild(a);
+        });
+        box.appendChild(l);
+      }
+      const target = $(targetId);
+      target.appendChild(box);
+      target.scrollTop = target.scrollHeight;
+    }
+
+    async function refreshSessions() {
+      const sessionList = $("sessionList");
+      sessionList.innerHTML = '<div class="small">加载中...</div>';
+      try {
+        const res = await fetch(`${normalizeBase()}/v1/threads?owner_id=${encodeURIComponent(ownerId)}`);
+        if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
+        const data = await res.json();
+        const rows = data.data || [];
+        state.threads = rows;
+        if (!rows.length) { sessionList.innerHTML = '<div class="small">暂无会话</div>'; return; }
+
+        const cur = $("threadId").value.trim();
+        sessionList.innerHTML = "";
+        rows.forEach(row => {
+          const item = document.createElement("div");
+          item.className = "history-item" + (row.id === cur ? " active" : "");
+          item.dataset.threadId = row.id;
+          item.innerHTML = `
+            <div class="meta"><span>${formatTime(row.last_message_at || row.created_at)}</span><span>${row.message_count || 0}</span></div>
+            <div class="summary">${escapeHtml(shortSummary(row.summary || "未命名会话"))}</div>
+            <div class="tags"><span class="tag">${escapeHtml(row.id)}</span><span class="tag">报告 ${row.report_count || 0}</span></div>
+          `;
+          item.addEventListener("click", async () => {
+            $("threadId").value = row.id;
+            localStorage.setItem(threadIdKey, row.id);
+            await loadConversation();
+            await refreshReports();
+            await refreshSessions();
+          });
+          sessionList.appendChild(item);
+        });
+      } catch (e) {
+        sessionList.innerHTML = `<div class="small" style="color:var(--danger)">加载失败：${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function loadConversation() {
+      const tid = $("threadId").value.trim();
+      const chatbox = $("chatbox");
+      const historyConversation = $("historyConversation");
+      chatbox.innerHTML = "";
+      historyConversation.innerHTML = "";
+      if (!tid) return;
+      try {
+        const res = await fetch(`${normalizeBase()}/v1/threads/${tid}/messages?owner_id=${encodeURIComponent(ownerId)}`);
+        if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
+        const data = await res.json();
+        const rows = data.data || [];
+        rows.forEach(item => {
+          if (item.role === "assistant") {
+            const ans = extractAnswerText(item.content);
+            addMessage("assistant", ans, [], "chatbox");
+            addMessage("assistant", ans, [], "historyConversation");
+          } else if (item.role === "user") {
+            addMessage("user", String(item.content || ""), [], "chatbox");
+            addMessage("user", String(item.content || ""), [], "historyConversation");
+          }
+        });
+      } catch (e) {
+        chatbox.innerHTML = `<div class="small" style="color:var(--danger)">加载失败：${escapeHtml(e.message)}</div>`;
+        historyConversation.innerHTML = chatbox.innerHTML;
+      }
+    }
+
+    async function refreshReports() {
+      const reportList = $("reportList");
+      const tid = $("threadId").value.trim();
+      reportList.innerHTML = '<div class="small">加载中...</div>';
+      if (!tid) { reportList.innerHTML = '<div class="small">请先选择会话</div>'; return; }
+      try {
+        const res = await fetch(`${normalizeBase()}/v1/threads/${tid}/reports?owner_id=${encodeURIComponent(ownerId)}`);
+        if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
+        const data = await res.json();
+        const rows = data.data || [];
+        state.reports = rows;
+        if (!rows.length) { reportList.innerHTML = '<div class="small">暂无报告</div>'; $("reportPreview").textContent = "请选择左侧报告进行预览"; return; }
+        reportList.innerHTML = "";
+        rows.forEach(r => {
+          const div = document.createElement("div");
+          div.className = "history-item";
+          const kb = r.bytes ? (r.bytes / 1024).toFixed(1) : "0.0";
+          div.innerHTML = `<div class="meta"><span>${formatTime(r.modified_at)}</span><span>${kb}KB</span></div><div class="summary">${escapeHtml(r.name)}</div><div class="tags"><a href="${absUrl(r.url)}" target="_blank">下载</a></div>`;
+          div.addEventListener("click", () => previewReport(r));
+          reportList.appendChild(div);
+        });
+      } catch (e) {
+        reportList.innerHTML = `<div class="small" style="color:var(--danger)">加载失败：${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function previewReport(r) {
+      try {
+        const res = await fetch(absUrl(r.url));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        state.reportText = text; state.reportName = r.name;
+        $("reportPreview").textContent = text || "(empty)";
+        setStatus($("reportStatus"), `已加载：${r.name}`);
+      } catch (e) {
+        $("reportPreview").textContent = `加载失败：${e.message}`;
+        setStatus($("reportStatus"), `失败：${e.message}`, true);
+      }
+    }
+
+    function exportReportMd() {
+      if (!state.reportText) { setStatus($("reportStatus"), "当前没有可导出的报告", true); return; }
+      const name = state.reportName || `report_${Date.now()}.md`;
+      const blob = new Blob([state.reportText], { type: "text/markdown;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name.endsWith(".md") ? name : `${name}.md`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+      setStatus($("reportStatus"), `已导出：${a.download}`);
+    }
+
+    function loadConfig() {
+      $("serviceUrl").value = localStorage.getItem("da_service_url") || "http://localhost:8200";
+      $("modelName").value = localStorage.getItem("da_model_name") || "gpt-4.1-mini";
+      $("modelApiBase").value = localStorage.getItem("da_model_api_base") || "";
+      $("modelApiKey").value = localStorage.getItem("da_model_api_key") || "";
+      $("threadId").value = localStorage.getItem(threadIdKey) || "";
+      $("ownerIdDisplay").value = ownerId;
+    }
+
+    function saveConfig() {
+      localStorage.setItem("da_service_url", $("serviceUrl").value.trim());
+      localStorage.setItem("da_model_name", $("modelName").value.trim());
+      localStorage.setItem("da_model_api_base", $("modelApiBase").value.trim());
+      localStorage.setItem("da_model_api_key", $("modelApiKey").value.trim());
+      localStorage.setItem(threadIdKey, $("threadId").value.trim());
+    }
+
+    $("btnSaveConfig").addEventListener("click", () => {
+      saveConfig();
+      setStatus($("healthStatus"), "配置已保存到浏览器本地");
+    });
+
+    $("btnHealth").addEventListener("click", async () => {
+      setStatus($("healthStatus"), "检查中...");
+      try {
+        const res = await fetch(`${normalizeBase()}/health`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        setStatus($("healthStatus"), `服务正常，timestamp=${d.timestamp}`);
+      } catch (e) {
+        setStatus($("healthStatus"), `检查失败：${e.message}`, true);
+      }
+    });
+
+    async function uploadChatFile(file) {
+      if (!file) { setStatus($("chatUploadStatus"), "请先选择文件", true); return; }
+      setStatus($("chatUploadStatus"), "上传中...");
+      const fd = new FormData(); fd.append("file", file); fd.append("purpose", "file-extract");
+      try {
+        const res = await fetch(`${normalizeBase()}/v1/files`, { method: "POST", body: fd });
+        if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
+        const d = await res.json();
+        state.fileIds.push(d.id);
+        renderFileIds();
+        setStatus($("chatUploadStatus"), `上传成功：${d.id}`);
+      } catch (e) {
+        setStatus($("chatUploadStatus"), `上传失败：${e.message}`, true);
+      }
+    }
+
+    $("btnPlusUpload").addEventListener("click", () => {
+      $("chatFileInput").click();
+    });
+
+    $("chatFileInput").addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+      await uploadChatFile(file);
+      $("chatFileInput").value = "";
+    });
+
+    $("btnSend").addEventListener("click", async () => {
+      const message = $("userInput").value.trim();
+      if (!message) { setStatus($("chatStatus"), "请输入消息", true); return; }
+      saveConfig();
+      addMessage("user", message, [], "chatbox");
+      setStatus($("chatStatus"), "请求中...");
+
+      const payload = {
+        model: $("modelName").value.trim(),
+        owner_id: ownerId,
+        messages: [{ role: "user", content: message }],
+        stream: false
+      };
+      if (state.fileIds.length) payload.file_ids = state.fileIds;
+      if ($("threadId").value.trim()) payload.thread_id = $("threadId").value.trim();
+      if ($("modelApiBase").value.trim()) payload.api_base = $("modelApiBase").value.trim();
+      if ($("modelApiKey").value.trim()) payload.api_key = $("modelApiKey").value.trim();
+
+      try {
+        const res = await fetch(`${normalizeBase()}/v1/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
+        const d = await res.json();
+        if (d.thread_id) {
+          $("threadId").value = d.thread_id;
+          localStorage.setItem(threadIdKey, d.thread_id);
+        }
+        const content = d?.choices?.[0]?.message?.content || "";
+        const answer = extractAnswerText(content);
+        const links = d.generated_files || d?.choices?.[0]?.message?.files || [];
+        addMessage("assistant", answer, links, "chatbox");
+        $("userInput").value = "";
+        setStatus($("chatStatus"), "完成");
+        await refreshSessions();
+        await loadConversation();
+        await refreshReports();
+      } catch (e) {
+        setStatus($("chatStatus"), `请求失败：${e.message}`, true);
+      }
+    });
+
+    $("btnNewSession").addEventListener("click", () => {
+      $("threadId").value = "";
+      localStorage.removeItem(threadIdKey);
+      $("chatbox").innerHTML = "";
+      setStatus($("chatStatus"), "已新建会话，下一条消息将进入新线程");
+      refreshSessions();
+      refreshReports();
+    });
+
+    $("btnLoadSessions").addEventListener("click", refreshSessions);
+    $("btnLoadReports").addEventListener("click", refreshReports);
+    $("btnExportMd").addEventListener("click", exportReportMd);
+
+    $("btnJumpHistory").addEventListener("click", () => switchPage("history"));
+    $("btnJumpReports").addEventListener("click", () => switchPage("reports"));
+    $("btnJumpSettings").addEventListener("click", () => switchPage("settings"));
+
+    document.querySelectorAll(".page-btn").forEach(btn => btn.addEventListener("click", () => switchPage(btn.dataset.page)));
+    $("langSelect").addEventListener("change", (e) => applyI18n(e.target.value));
+    $("themeSelect").addEventListener("change", (e) => applyTheme(e.target.value));
+
+    (async () => {
+      loadConfig();
+      renderFileIds();
+
+      const lang = localStorage.getItem("da_lang") || "zh";
+      $("langSelect").value = lang;
+      applyI18n(lang);
+
+      const theme = localStorage.getItem("da_theme") || "default";
+      $("themeSelect").value = theme;
+      applyTheme(theme);
+
+      await refreshSessions();
+      if ($("threadId").value.trim()) {
+        await loadConversation();
+        await refreshReports();
+      }
+    })();
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

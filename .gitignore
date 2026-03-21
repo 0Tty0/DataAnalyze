@@ -1,0 +1,21 @@
+﻿# Python caches
+__pycache__/
+*.py[cod]
+
+# Local env secrets
+lightweight/.env
+service_version/.env
+
+# Runtime artifacts
+lightweight/workspace/
+service_version/workspace/
+
+# Optional local envs
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

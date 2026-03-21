@@ -1,0 +1,469 @@
+﻿import contextlib
+from datetime import datetime
+import io
+import json
+import logging
+import os
+import re
+import time
+import traceback
+import uuid
+from typing import Dict, List, Optional, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from openai import OpenAI
+
+
+class AgentState(TypedDict):
+    messages: List[Dict[str, str]]
+    response_chunks: List[str]
+    round_idx: int
+    max_rounds: int
+    pending_code: Optional[str]
+    finished: bool
+    temperature: float
+    max_tokens: int
+    top_p: Optional[float]
+    top_k: Optional[int]
+    plan_text: str
+    final_answer: str
+    last_execution_output: str
+    consecutive_exec_failures: int
+    max_exec_retries: int
+
+
+class DeepAnalyzeLangGraph:
+    """基于 LangGraph 的节点化数据分析代理：Planner -> Coder -> Executor -> Reporter。"""
+
+    def __init__(
+        self,
+        model_name: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        max_rounds: int = 30,
+        request_timeout: int = 120,
+        max_api_retries: int = 3,
+        max_exec_retries: int = 2,
+        log_level: str = "INFO",
+    ):
+        self.model_name = model_name
+        self.max_rounds = max_rounds
+        self.request_timeout = request_timeout
+        self.max_api_retries = max_api_retries
+        self.max_exec_retries = max_exec_retries
+        self.run_id = uuid.uuid4().hex[:12]
+        self.logger = self._build_logger(log_level)
+        self.client = self._build_client(api_base=api_base, api_key=api_key)
+        self.graph = self._build_graph()
+
+    def _build_logger(self, log_level: str) -> logging.Logger:
+        logger_name = f"DeepAnalyzeLangGraph.{self.run_id}"
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+            logger.addHandler(handler)
+        logger.propagate = False
+        return logger
+
+    def _log_event(self, node: str, event: str, **fields: object) -> None:
+        payload: Dict[str, object] = {"run_id": self.run_id, "node": node, "event": event}
+        payload.update(fields)
+        self.logger.info(json.dumps(payload, ensure_ascii=False))
+
+    def _build_client(self, api_base: Optional[str], api_key: Optional[str]) -> OpenAI:
+        key = api_key or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("需要提供 API Key，请设置 API_KEY 或 OPENAI_API_KEY。")
+        base = api_base or os.getenv("API_BASE")
+        if base:
+            return OpenAI(base_url=base, api_key=key, timeout=self.request_timeout)
+        return OpenAI(api_key=key, timeout=self.request_timeout)
+
+    def execute_code(self, code_str: str) -> str:
+        """执行 Python 代码并返回标准输出、错误输出或格式化错误信息。"""
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                exec(code_str, {})
+            output = stdout_capture.getvalue()
+            if stderr_capture.getvalue():
+                output += stderr_capture.getvalue()
+            return output
+        except Exception as exec_error:  # noqa: BLE001
+            code_lines = code_str.splitlines()
+            tb_lines = traceback.format_exc().splitlines()
+            error_line = None
+
+            for line in tb_lines:
+                if 'File "<string>", line' in line:
+                    try:
+                        line_num = int(line.split(", line ")[1].split(",")[0])
+                        error_line = line_num
+                        break
+                    except (IndexError, ValueError):
+                        continue
+
+            error_message = "Traceback (most recent call last):\n"
+            if error_line and 1 <= error_line <= len(code_lines):
+                error_message += f'  File "<string>", line {error_line}, in <module>\n'
+                error_message += f"    {code_lines[error_line - 1].strip()}\n"
+            error_message += f"{type(exec_error).__name__}: {str(exec_error)}"
+            if stderr_capture.getvalue():
+                error_message += f"\n{stderr_capture.getvalue()}"
+            return f"[Error]:\n{error_message.strip()}"
+
+    def _chat_with_retry(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        top_p: Optional[float],
+        top_k: Optional[int],
+        stop: Optional[List[str]],
+        node: str,
+    ) -> str:
+        api_messages = self._normalize_messages_for_api(messages)
+        kwargs: Dict[str, object] = {
+            "model": self.model_name,
+            "messages": api_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if stop:
+            kwargs["stop"] = stop
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        if top_k is not None:
+            kwargs["extra_body"] = {"top_k": top_k, "add_generation_prompt": False}
+
+        last_error: Optional[Exception] = None
+        for attempt in range(1, self.max_api_retries + 1):
+            try:
+                self._log_event(node, "llm_call", attempt=attempt)
+                completion = self.client.chat.completions.create(**kwargs)
+                return completion.choices[0].message.content or ""
+            except Exception as err:  # noqa: BLE001
+                last_error = err
+                self._log_event(node, "llm_call_failed", attempt=attempt, error=str(err))
+                if attempt < self.max_api_retries:
+                    time.sleep(min(2 ** (attempt - 1), 8))
+
+        raise RuntimeError(f"LLM call failed after retries: {last_error}") from last_error
+
+    @staticmethod
+    def _normalize_messages_for_api(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """把内部消息规范化为 OpenAI 兼容格式。"""
+        allowed_roles = {"system", "user", "assistant", "tool", "function"}
+        normalized: List[Dict[str, str]] = []
+
+        for msg in messages:
+            role = str(msg.get("role", "user"))
+            content = str(msg.get("content", ""))
+            if role in allowed_roles:
+                normalized.append({"role": role, "content": content})
+                continue
+
+            if role == "execute":
+                normalized.append(
+                    {
+                        "role": "user",
+                        "content": f"以下是代码执行结果，请据此继续分析和修正：\n<Execute>\n{content}\n</Execute>",
+                    }
+                )
+                continue
+
+            normalized.append({"role": "user", "content": content})
+
+        return normalized
+
+    @staticmethod
+    def _extract_code(ans: str) -> Optional[str]:
+        code_match = re.search(r"<Code>(.*?)</Code>", ans, re.DOTALL)
+        if not code_match:
+            return None
+        code_content = code_match.group(1).strip()
+        md_match = re.search(r"```(?:python)?(.*?)```", code_content, re.DOTALL)
+        return md_match.group(1).strip() if md_match else code_content
+
+    @staticmethod
+    def _extract_answer(ans: str) -> str:
+        answer_match = re.search(r"<Answer>(.*?)</Answer>", ans, re.DOTALL)
+        if answer_match:
+            return answer_match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _sanitize_report_text(text: str) -> str:
+        lines = []
+        for line in (text or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                lines.append(line)
+                continue
+            if any(keyword in stripped for keyword in ["已保存到", "保存到", "下载链接", "文件路径", "导出完成", "见下方"]):
+                continue
+            lines.append(line)
+        cleaned = "\n".join(lines).strip()
+        return cleaned or (text or "").strip()
+
+    def _planner_node(self, state: AgentState) -> AgentState:
+        if state["finished"] or state["round_idx"] >= state["max_rounds"]:
+            state["finished"] = True
+            return state
+
+        user_prompt = state["messages"][0]["content"]
+        planning_context = (
+            f"当前任务：\n{user_prompt}\n\n"
+            f"上一轮执行结果：\n{state['last_execution_output'] or '无'}\n\n"
+            f"当前轮次：{state['round_idx']} / {state['max_rounds']}"
+        )
+        planning_messages: List[Dict[str, str]] = [
+            {
+                "role": "system",
+                "content": "你是规划节点。请用简洁中文概括当前任务的分析路线，指出要检查的数据、关键计算步骤和输出重点。不要写代码，不要给最终答案。",
+            },
+            {"role": "user", "content": planning_context},
+        ]
+        plan = self._chat_with_retry(
+            planning_messages,
+            state["temperature"],
+            min(state["max_tokens"], 512),
+            state["top_p"],
+            state["top_k"],
+            stop=None,
+            node="planner",
+        ).strip()
+        state["plan_text"] = plan
+        state["response_chunks"].append(f"<Plan>\n{plan}\n</Plan>")
+        self._log_event("planner", "plan_generated", round_idx=state["round_idx"])
+        return state
+
+    def _coder_node(self, state: AgentState) -> AgentState:
+        if state["finished"] or state["round_idx"] >= state["max_rounds"]:
+            state["finished"] = True
+            return state
+
+        coder_messages: List[Dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "你是编码节点。请严格遵循 DeepAnalyze 标签协议：需要思考时使用 <Analyze>...</Analyze>，"
+                    "需要执行代码时仅在 <Code>...</Code> 中输出可执行 Python，最终必须在 <Answer>...</Answer> 中给出完整的中文分析报告正文。"
+                    "<Answer> 必须是最终报告本体，不要写“分析内容已保存到 xx”、不要写文件路径、不要写下载说明、不要写多余寒暄。"
+                ),
+            },
+            {"role": "system", "content": f"当前计划：\n{state['plan_text']}"},
+        ]
+        if state["last_execution_output"]:
+            coder_messages.append({"role": "system", "content": f"上一轮执行输出：\n{state['last_execution_output']}"})
+        coder_messages.extend(state["messages"])
+
+        ans = self._chat_with_retry(
+            coder_messages,
+            state["temperature"],
+            state["max_tokens"],
+            state["top_p"],
+            state["top_k"],
+            stop=["</Code>"],
+            node="coder",
+        )
+        if ans.count("<Code>") > ans.count("</Code>"):
+            ans += "</Code>"
+
+        state["response_chunks"].append(ans)
+        state["messages"].append({"role": "assistant", "content": ans})
+        state["round_idx"] += 1
+        state["pending_code"] = self._extract_code(ans)
+
+        answer_text = self._extract_answer(ans)
+        if answer_text:
+            state["final_answer"] = self._sanitize_report_text(answer_text)
+            state["finished"] = True
+            state["pending_code"] = None
+
+        self._log_event(
+            "coder",
+            "coder_output",
+            round_idx=state["round_idx"],
+            has_code=bool(state["pending_code"]),
+            has_answer=bool(answer_text),
+        )
+        return state
+
+    def _executor_node(self, state: AgentState) -> AgentState:
+        code_str = state.get("pending_code")
+        if not code_str:
+            return state
+
+        self._log_event("executor", "execution_start", round_idx=state["round_idx"])
+        exe_output = self.execute_code(code_str)
+        state["last_execution_output"] = exe_output
+        state["response_chunks"].append(f"<Execute>\n{exe_output}\n</Execute>")
+        state["messages"].append({"role": "execute", "content": exe_output})
+        state["pending_code"] = None
+
+        if exe_output.startswith("[Error]:") or exe_output.startswith("[Timeout]:"):
+            state["consecutive_exec_failures"] += 1
+            self._log_event(
+                "executor",
+                "execution_failed",
+                failures=state["consecutive_exec_failures"],
+                max_retries=state["max_exec_retries"],
+            )
+        else:
+            state["consecutive_exec_failures"] = 0
+            self._log_event("executor", "execution_success")
+        return state
+
+    def _reporter_node(self, state: AgentState) -> AgentState:
+        if state["final_answer"]:
+            report_text = f"<Answer>\n{state['final_answer']}\n</Answer>"
+            state["response_chunks"].append(report_text)
+            self._log_event("reporter", "used_existing_answer")
+            state["finished"] = True
+            return state
+
+        reporter_messages: List[Dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "你是报告节点。请把前面所有分析、代码执行结果和结论整理为一份完整的中文分析报告。"
+                    "最终必须使用 <Answer>...</Answer> 包裹报告正文，报告中不要出现“已保存到文件”“见下载链接”“导出完成”等说明。"
+                    "如果任务尚未完成，请直接说明还缺什么，但仍然保持报告体裁。"
+                ),
+            },
+            {"role": "user", "content": "\n\n".join(state["response_chunks"][-20:])},
+        ]
+        report = self._chat_with_retry(
+            reporter_messages,
+            state["temperature"],
+            min(state["max_tokens"], 1024),
+            state["top_p"],
+            state["top_k"],
+            stop=None,
+            node="reporter",
+        ).strip()
+        if "<Answer>" not in report:
+            report = f"<Answer>\n{report}\n</Answer>"
+        state["response_chunks"].append(report)
+        state["final_answer"] = self._sanitize_report_text(self._extract_answer(report))
+        state["finished"] = True
+        self._log_event("reporter", "report_generated")
+        return state
+
+    @staticmethod
+    def _route_after_coder(state: AgentState) -> str:
+        if state.get("finished") or state["round_idx"] >= state["max_rounds"]:
+            return "reporter"
+        if state.get("pending_code"):
+            return "executor"
+        return "planner"
+
+    @staticmethod
+    def _route_after_executor(state: AgentState) -> str:
+        if state.get("finished") or state["round_idx"] >= state["max_rounds"]:
+            return "reporter"
+        if state["consecutive_exec_failures"] > state["max_exec_retries"]:
+            return "reporter"
+        if state["consecutive_exec_failures"] > 0:
+            return "coder"
+        return "planner"
+
+    def _build_graph(self):
+        graph = StateGraph(AgentState)
+        graph.add_node("planner", self._planner_node)
+        graph.add_node("coder", self._coder_node)
+        graph.add_node("executor", self._executor_node)
+        graph.add_node("reporter", self._reporter_node)
+
+        graph.add_edge(START, "planner")
+        graph.add_edge("planner", "coder")
+        graph.add_conditional_edges(
+            "coder",
+            self._route_after_coder,
+            {"executor": "executor", "planner": "planner", "reporter": "reporter"},
+        )
+        graph.add_conditional_edges(
+            "executor",
+            self._route_after_executor,
+            {"coder": "coder", "planner": "planner", "reporter": "reporter"},
+        )
+        graph.add_edge("reporter", END)
+        return graph.compile()
+
+    def _save_report_markdown(self, workspace: str, content: str) -> str:
+        report_dir = os.path.join(workspace, "reports")
+        os.makedirs(report_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"report_{ts}_{self.run_id}.md"
+        report_path = os.path.abspath(os.path.join(report_dir, filename))
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        self._log_event("reporter", "report_saved", report_path=report_path)
+        return report_path
+
+    def generate(
+        self,
+        prompt: str,
+        workspace: str,
+        temperature: float = 0.5,
+        max_tokens: int = 32768,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+    ) -> Dict[str, str]:
+        """运行一次完整的 LangGraph 分析流程，并返回 reasoning 与报告路径。"""
+        original_cwd = os.getcwd()
+        os.makedirs(workspace, exist_ok=True)
+        os.chdir(workspace)
+        self._log_event("runtime", "run_start")
+
+        state: AgentState = {
+            "messages": [{"role": "user", "content": prompt}],
+            "response_chunks": [],
+            "round_idx": 0,
+            "max_rounds": self.max_rounds,
+            "pending_code": None,
+            "finished": False,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "top_k": top_k,
+            "plan_text": "",
+            "final_answer": "",
+            "last_execution_output": "",
+            "consecutive_exec_failures": 0,
+            "max_exec_retries": self.max_exec_retries,
+        }
+
+        try:
+            final_state = self.graph.invoke(state, config={"recursion_limit": max(200, self.max_rounds * 8)})
+            reasoning = "\n".join(final_state["response_chunks"])
+            report_body = final_state.get("final_answer", "").strip()
+            if not report_body:
+                report_body = self._sanitize_report_text(self._extract_answer(reasoning).strip() or reasoning)
+            report_md = f"# 分析报告\n\n{report_body}\n"
+            report_path = self._save_report_markdown(workspace, report_md)
+            self._log_event(
+                "runtime",
+                "run_end",
+                rounds=final_state["round_idx"],
+                finished=final_state["finished"],
+                report_path=report_path,
+            )
+        except Exception as err:  # noqa: BLE001
+            self._log_event("runtime", "run_crashed", error=str(err))
+            reasoning = "\n".join(state["response_chunks"])
+            report_md = f"# 分析报告（异常中断）\n\n{reasoning}\n"
+            report_path = self._save_report_markdown(workspace, report_md)
+        finally:
+            os.chdir(original_cwd)
+
+        return {"reasoning": reasoning, "report_path": report_path}
+
+
+# 向后兼容旧名称
+DeepAnalyzeVLLM = DeepAnalyzeLangGraph

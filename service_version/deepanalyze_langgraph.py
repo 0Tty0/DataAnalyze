@@ -48,6 +48,8 @@ class DeepAnalyzeLangGraph:
         exec_timeout_sec: int = 30,
         exec_memory_mb: int = 512,
         exec_cpu_seconds: int = 30,
+        max_context_tokens: int = 8000,
+        reporter_context_tokens: int = 3000,
         log_level: str = "INFO",
     ):
         self.model_name = model_name
@@ -58,6 +60,8 @@ class DeepAnalyzeLangGraph:
         self.exec_timeout_sec = exec_timeout_sec
         self.exec_memory_mb = exec_memory_mb
         self.exec_cpu_seconds = exec_cpu_seconds
+        self.max_context_tokens = max(int(max_context_tokens), 1024)
+        self.reporter_context_tokens = max(int(reporter_context_tokens), 512)
         self.run_id = uuid.uuid4().hex[:12]
         self.logger = self._build_logger(log_level)
         self.client = self._build_client(api_base=api_base, api_key=api_key)
@@ -246,6 +250,133 @@ class DeepAnalyzeLangGraph:
         cleaned = "\n".join(lines).strip()
         return cleaned or (text or "").strip()
 
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        # ?????????????? 4 ??? 1 token?
+        return max(1, len(str(text or "")) // 4)
+
+    def _estimate_messages_tokens(self, messages: List[Dict[str, str]]) -> int:
+        total = 0
+        for msg in messages:
+            total += self._estimate_tokens(msg.get("role", ""))
+            total += self._estimate_tokens(msg.get("content", ""))
+        return total
+
+    def _build_middle_summary(self, middle_messages: List[Dict[str, str]], state: AgentState) -> str:
+        if not middle_messages:
+            return ""
+
+        merged_parts: List[str] = []
+        for msg in middle_messages:
+            role = msg.get("role", "user")
+            content = str(msg.get("content", "")).strip()
+            if not content:
+                continue
+            merged_parts.append(f"[{role}]\n{content}")
+
+        if not merged_parts:
+            return ""
+
+        raw_text = "\n\n".join(merged_parts)
+        if self._estimate_tokens(raw_text) <= 1200:
+            return raw_text
+
+        summary_messages: List[Dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "??????????????????????????????"
+                    "??????????????????????????"
+                    "??????????????"
+                ),
+            },
+            {"role": "user", "content": raw_text},
+        ]
+
+        try:
+            summary = self._chat_with_retry(
+                summary_messages,
+                state["temperature"],
+                min(512, state["max_tokens"]),
+                state["top_p"],
+                state["top_k"],
+                stop=None,
+                node="context",
+            ).strip()
+            return summary or raw_text[:4000]
+        except Exception as err:  # noqa: BLE001
+            self._log_event("context", "summary_failed", error=str(err))
+            return raw_text[:4000]
+
+    def _compress_messages_for_coder(self, state: AgentState) -> List[Dict[str, str]]:
+        history = list(state["messages"])
+        budget = self.max_context_tokens
+
+        total_tokens = self._estimate_messages_tokens(history)
+        if total_tokens <= budget:
+            return history
+
+        system_msgs = [m for m in history if m.get("role") == "system"]
+        non_system = [m for m in history if m.get("role") != "system"]
+
+        if len(non_system) <= 8:
+            return history[-8:]
+
+        anchor = non_system[:1]
+        recent_keep = 8
+        middle = non_system[1:-recent_keep]
+        recent = non_system[-recent_keep:]
+
+        middle_summary = self._build_middle_summary(middle, state)
+
+        compressed: List[Dict[str, str]] = []
+        if system_msgs:
+            compressed.extend(system_msgs[-2:])
+        compressed.extend(anchor)
+        if middle_summary:
+            compressed.append({"role": "user", "content": f"[????]\n{middle_summary}"})
+        compressed.extend(recent)
+
+        while self._estimate_messages_tokens(compressed) > budget and len(recent) > 2:
+            recent = recent[1:]
+            compressed = []
+            if system_msgs:
+                compressed.extend(system_msgs[-2:])
+            compressed.extend(anchor)
+            if middle_summary:
+                compressed.append({"role": "user", "content": f"[????]\n{middle_summary}"})
+            compressed.extend(recent)
+
+        self._log_event(
+            "context",
+            "compressed",
+            before_tokens=total_tokens,
+            after_tokens=self._estimate_messages_tokens(compressed),
+            before_messages=len(history),
+            after_messages=len(compressed),
+        )
+        return compressed
+
+    def _build_reporter_context(self, chunks: List[str]) -> str:
+        if not chunks:
+            return ""
+
+        budget = self.reporter_context_tokens
+        picked: List[str] = []
+        used = 0
+
+        for chunk in reversed(chunks):
+            tks = self._estimate_tokens(chunk)
+            if picked and (used + tks > budget):
+                break
+            picked.append(chunk)
+            used += tks
+
+        picked.reverse()
+        context_text = "\n\n".join(picked)
+        self._log_event("context", "reporter_context_built", chunks=len(picked), tokens=used)
+        return context_text
+
     def _planner_node(self, state: AgentState) -> AgentState:
         if state["finished"] or state["round_idx"] >= state["max_rounds"]:
             state["finished"] = True
@@ -296,7 +427,8 @@ class DeepAnalyzeLangGraph:
         ]
         if state["last_execution_output"]:
             coder_messages.append({"role": "system", "content": f"上一轮执行输出：\n{state['last_execution_output']}"})
-        coder_messages.extend(state["messages"])
+        compressed_history = self._compress_messages_for_coder(state)
+        coder_messages.extend(compressed_history)
 
         ans = self._chat_with_retry(
             coder_messages,
@@ -372,7 +504,7 @@ class DeepAnalyzeLangGraph:
                     "如果任务尚未完成，请直接说明还缺什么，但仍然保持报告体裁。"
                 ),
             },
-            {"role": "user", "content": "\n\n".join(state["response_chunks"][-20:])},
+            {"role": "user", "content": self._build_reporter_context(state["response_chunks"])},
         ]
         report = self._chat_with_retry(
             reporter_messages,

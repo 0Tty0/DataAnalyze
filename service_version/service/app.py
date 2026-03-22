@@ -230,6 +230,7 @@ def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse:
         max_rounds=int(os.getenv("MAX_ROUNDS", "20")),
         max_api_retries=int(os.getenv("MAX_API_RETRIES", "3")),
         max_exec_retries=int(os.getenv("MAX_EXEC_RETRIES", "2")),
+        max_context_tokens=int(os.getenv("MAX_CONTEXT_TOKENS", "8000")),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )
 

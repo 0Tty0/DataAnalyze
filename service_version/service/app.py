@@ -191,7 +191,7 @@ def retrieve_thread(thread_id: str, owner_id: str | None = None, user_id: str | 
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse:
+async def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse:
     if req.stream:
         raise HTTPException(status_code=400, detail="当前服务版仅支持非流式请求：stream=false")
 
@@ -234,7 +234,7 @@ def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )
 
-    result = agent.generate(
+    result = await agent.agenerate(
         prompt=prompt,
         workspace=workspace,
         temperature=req.temperature or 0.5,

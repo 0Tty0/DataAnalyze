@@ -129,7 +129,7 @@
       <div class="layout">
         <div class="card">
           <h3 data-i18n="chat_side_title">会话信息</h3>
-          <div class="row"><label data-i18n="label_owner">用户ID</label><input id="ownerIdDisplay" readonly/></div>
+          <div class="row"><label data-i18n="label_owner">用户ID</label><input id="ownerIdDisplay" placeholder="user-..."/></div>
           <div class="row"><label data-i18n="label_thread">当前线程</label><input id="threadId" placeholder="thread-..."/></div>
           <div class="row"><button class="btn2" id="btnNewSession" data-i18n="btn_new_session">新建会话</button></div>
           <div class="row"><label data-i18n="label_file_ids">已上传 file_id</label><div id="fileIds"></div></div>
@@ -262,10 +262,12 @@
       sunset: { bg1: "#fff3ea", bg2: "#fffaf5", brand: "#ea6a1f", brand2: "#b9480a" }
     };
 
-    const state = { fileIds: [], threads: [], reports: [], reportText: "", reportName: "" };
+    const state = { draftFileIds: [], threadFileIds: {}, threads: [], reports: [], reportText: "", reportName: "" };
     const $ = (id) => document.getElementById(id);
     const ownerIdKey = "da_owner_id";
     const threadIdKey = "da_current_thread_id";
+    const fileMapKeyPrefix = "da_thread_file_map:";
+    const draftFileKeyPrefix = "da_draft_file_ids:";
 
     function getOrCreateOwnerId() {
       let value = localStorage.getItem(ownerIdKey);
@@ -276,7 +278,70 @@
       return value;
     }
 
-    const ownerId = getOrCreateOwnerId();
+    let ownerId = getOrCreateOwnerId();
+
+    function setOwnerId(value) {
+      const v = String(value || "").trim();
+      if (!v) return false;
+      ownerId = v;
+      localStorage.setItem(ownerIdKey, v);
+      if ($("ownerIdDisplay")) $("ownerIdDisplay").value = v;
+      return true;
+    }
+
+    function fileMapKeyForOwner() {
+      return `${fileMapKeyPrefix}${ownerId}`;
+    }
+
+    function draftFileKeyForOwner() {
+      return `${draftFileKeyPrefix}${ownerId}`;
+    }
+
+    function saveFileState() {
+      localStorage.setItem(fileMapKeyForOwner(), JSON.stringify(state.threadFileIds || {}));
+      localStorage.setItem(draftFileKeyForOwner(), JSON.stringify(state.draftFileIds || []));
+    }
+
+    function loadFileState() {
+      try {
+        const rawMap = localStorage.getItem(fileMapKeyForOwner());
+        const rawDraft = localStorage.getItem(draftFileKeyForOwner());
+        state.threadFileIds = rawMap ? JSON.parse(rawMap) : {};
+        state.draftFileIds = rawDraft ? JSON.parse(rawDraft) : [];
+        if (!state.threadFileIds || typeof state.threadFileIds !== "object") state.threadFileIds = {};
+        if (!Array.isArray(state.draftFileIds)) state.draftFileIds = [];
+      } catch (_) {
+        state.threadFileIds = {};
+        state.draftFileIds = [];
+      }
+    }
+
+
+    function getCurrentThreadId() {
+      return $("threadId").value.trim();
+    }
+
+    function getCurrentFileIds() {
+      const tid = getCurrentThreadId();
+      if (!tid) return state.draftFileIds;
+      if (!state.threadFileIds[tid]) state.threadFileIds[tid] = [];
+      return state.threadFileIds[tid];
+    }
+
+    function setCurrentFileIds(ids) {
+      const clean = Array.from(new Set((ids || []).filter(Boolean)));
+      const tid = getCurrentThreadId();
+      if (!tid) {
+        state.draftFileIds = clean;
+      } else {
+        state.threadFileIds[tid] = clean;
+      }
+      saveFileState();
+    }
+
+    function clearCurrentFileIds() {
+      setCurrentFileIds([]);
+    }
 
     function setStatus(el, text, err = false) { el.textContent = text || ""; el.className = err ? "status error" : "status"; }
     function normalizeBase() { return $("serviceUrl").value.trim().replace(/\/+$/, ""); }
@@ -316,12 +381,13 @@
     }
 
     function renderFileIds() {
+      const ids = getCurrentFileIds();
       const render = (target, cls = "pill") => {
         const el = $(target);
         if (!el) return;
         el.innerHTML = "";
-        if (!state.fileIds.length) { el.innerHTML = '<span class="small">暂无</span>'; return; }
-        state.fileIds.forEach(id => {
+        if (!ids.length) { el.innerHTML = '<span class="small">??</span>'; return; }
+        ids.forEach(id => {
           const s = document.createElement("span");
           s.className = cls;
           s.textContent = id;
@@ -329,7 +395,6 @@
         });
       };
       render("fileIds", "pill");
-      
       render("chatFileBar", "chat-file-pill");
     }
 
@@ -375,6 +440,7 @@
           item.addEventListener("click", async () => {
             $("threadId").value = row.id;
             localStorage.setItem(threadIdKey, row.id);
+            renderFileIds();
             await loadConversation();
             await refreshReports();
             await refreshSessions();
@@ -471,7 +537,8 @@
       $("modelApiBase").value = localStorage.getItem("da_model_api_base") || "";
       $("modelApiKey").value = localStorage.getItem("da_model_api_key") || "";
       $("threadId").value = localStorage.getItem(threadIdKey) || "";
-      $("ownerIdDisplay").value = ownerId;
+      setOwnerId(localStorage.getItem(ownerIdKey) || ownerId);
+      loadFileState();
     }
 
     function saveConfig() {
@@ -480,7 +547,32 @@
       localStorage.setItem("da_model_api_base", $("modelApiBase").value.trim());
       localStorage.setItem("da_model_api_key", $("modelApiKey").value.trim());
       localStorage.setItem(threadIdKey, $("threadId").value.trim());
+      setOwnerId($("ownerIdDisplay").value);
     }
+
+
+    $("ownerIdDisplay").addEventListener("change", async () => {
+      const oldOwner = ownerId;
+      const changed = setOwnerId($("ownerIdDisplay").value);
+      if (!changed) {
+        $("ownerIdDisplay").value = oldOwner;
+        return;
+      }
+      if (oldOwner !== ownerId) {
+        $("threadId").value = "";
+        localStorage.removeItem(threadIdKey);
+        state.threadFileIds = {};
+        state.draftFileIds = [];
+        saveFileState();
+        loadFileState();
+        renderFileIds();
+        $("chatbox").innerHTML = "";
+        $("historyConversation").innerHTML = "";
+        $("reportList").innerHTML = "";
+        $("reportPreview").textContent = "???????????";
+        await refreshSessions();
+      }
+    });
 
     $("btnSaveConfig").addEventListener("click", () => {
       saveConfig();
@@ -507,7 +599,9 @@
         const res = await fetch(`${normalizeBase()}/v1/files`, { method: "POST", body: fd });
         if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
         const d = await res.json();
-        state.fileIds.push(d.id);
+        const ids = getCurrentFileIds();
+        if (!ids.includes(d.id)) ids.push(d.id);
+        setCurrentFileIds(ids);
         renderFileIds();
         setStatus($("chatUploadStatus"), `上传成功：${d.id}`);
       } catch (e) {
@@ -538,7 +632,8 @@
         messages: [{ role: "user", content: message }],
         stream: false
       };
-      if (state.fileIds.length) payload.file_ids = state.fileIds;
+      const activeFileIds = getCurrentFileIds();
+      if (activeFileIds.length) payload.file_ids = activeFileIds;
       if ($("threadId").value.trim()) payload.thread_id = $("threadId").value.trim();
       if ($("modelApiBase").value.trim()) payload.api_base = $("modelApiBase").value.trim();
       if ($("modelApiKey").value.trim()) payload.api_key = $("modelApiKey").value.trim();
@@ -552,8 +647,15 @@
         if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
         const d = await res.json();
         if (d.thread_id) {
+          const prevThreadId = getCurrentThreadId();
           $("threadId").value = d.thread_id;
           localStorage.setItem(threadIdKey, d.thread_id);
+          if (!prevThreadId && state.draftFileIds.length) {
+            state.threadFileIds[d.thread_id] = [...state.draftFileIds];
+            state.draftFileIds = [];
+            saveFileState();
+          }
+          renderFileIds();
         }
         const content = d?.choices?.[0]?.message?.content || "";
         const answer = extractAnswerText(content);
@@ -572,8 +674,11 @@
     $("btnNewSession").addEventListener("click", () => {
       $("threadId").value = "";
       localStorage.removeItem(threadIdKey);
+      state.draftFileIds = [];
+      saveFileState();
+      renderFileIds();
       $("chatbox").innerHTML = "";
-      setStatus($("chatStatus"), "已新建会话，下一条消息将进入新线程");
+      setStatus($("chatStatus"), "?????????????????");
       refreshSessions();
       refreshReports();
     });

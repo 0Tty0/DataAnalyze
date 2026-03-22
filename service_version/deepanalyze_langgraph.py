@@ -1,14 +1,14 @@
-﻿import contextlib
-from datetime import datetime
-import io
+﻿from datetime import datetime
 import json
 import logging
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
-import traceback
 import uuid
-from typing import Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
@@ -30,6 +30,7 @@ class AgentState(TypedDict):
     last_execution_output: str
     consecutive_exec_failures: int
     max_exec_retries: int
+    workspace: str
 
 
 class DeepAnalyzeLangGraph:
@@ -44,6 +45,9 @@ class DeepAnalyzeLangGraph:
         request_timeout: int = 120,
         max_api_retries: int = 3,
         max_exec_retries: int = 2,
+        exec_timeout_sec: int = 30,
+        exec_memory_mb: int = 512,
+        exec_cpu_seconds: int = 30,
         log_level: str = "INFO",
     ):
         self.model_name = model_name
@@ -51,6 +55,9 @@ class DeepAnalyzeLangGraph:
         self.request_timeout = request_timeout
         self.max_api_retries = max_api_retries
         self.max_exec_retries = max_exec_retries
+        self.exec_timeout_sec = exec_timeout_sec
+        self.exec_memory_mb = exec_memory_mb
+        self.exec_cpu_seconds = exec_cpu_seconds
         self.run_id = uuid.uuid4().hex[:12]
         self.logger = self._build_logger(log_level)
         self.client = self._build_client(api_base=api_base, api_key=api_key)
@@ -81,40 +88,69 @@ class DeepAnalyzeLangGraph:
             return OpenAI(base_url=base, api_key=key, timeout=self.request_timeout)
         return OpenAI(api_key=key, timeout=self.request_timeout)
 
-    def execute_code(self, code_str: str) -> str:
-        """执行 Python 代码并返回标准输出、错误输出或格式化错误信息。"""
-        stdout_capture = io.StringIO()
-        stderr_capture = io.StringIO()
+    def _subprocess_limits(self) -> Dict[str, Any]:
+        """? POSIX ????????????Windows ??????"""
+        kwargs: Dict[str, Any] = {}
+        if os.name != "posix":
+            return kwargs
 
         try:
-            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
-                exec(code_str, {})
-            output = stdout_capture.getvalue()
-            if stderr_capture.getvalue():
-                output += stderr_capture.getvalue()
+            import resource
+        except Exception:  # noqa: BLE001
+            return kwargs
+
+        memory_bytes = max(int(self.exec_memory_mb), 64) * 1024 * 1024
+        cpu_seconds = max(int(self.exec_cpu_seconds), 1)
+
+        def _limit_resources() -> None:
+            resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+
+        kwargs["preexec_fn"] = _limit_resources
+        return kwargs
+
+    def execute_code(self, code_str: str, workspace: str) -> str:
+        """?????????????? stdout/stderr?"""
+        os.makedirs(workspace, exist_ok=True)
+        tmp_path = ""
+
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix="agent_exec_", suffix=".py", dir=workspace)
+            os.close(fd)
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(code_str)
+
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+
+            run_kwargs: Dict[str, Any] = {
+                "args": [sys.executable, tmp_path],
+                "cwd": workspace,
+                "capture_output": True,
+                "text": True,
+                "timeout": self.exec_timeout_sec,
+                "env": env,
+            }
+            run_kwargs.update(self._subprocess_limits())
+            completed = subprocess.run(**run_kwargs)
+
+            output = (completed.stdout or "") + (completed.stderr or "")
+            if completed.returncode != 0:
+                err_text = output.strip() or f"Process exited with code {completed.returncode}"
+                return f"[Error]:\n{err_text}"
             return output
+        except subprocess.TimeoutExpired as timeout_err:
+            timeout_output = (timeout_err.stdout or "") + (timeout_err.stderr or "")
+            return f"[Timeout]: execution exceeded {self.exec_timeout_sec} seconds\n{timeout_output}".strip()
         except Exception as exec_error:  # noqa: BLE001
-            code_lines = code_str.splitlines()
-            tb_lines = traceback.format_exc().splitlines()
-            error_line = None
+            return f"[Error]:\n{type(exec_error).__name__}: {exec_error}"
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
-            for line in tb_lines:
-                if 'File "<string>", line' in line:
-                    try:
-                        line_num = int(line.split(", line ")[1].split(",")[0])
-                        error_line = line_num
-                        break
-                    except (IndexError, ValueError):
-                        continue
-
-            error_message = "Traceback (most recent call last):\n"
-            if error_line and 1 <= error_line <= len(code_lines):
-                error_message += f'  File "<string>", line {error_line}, in <module>\n'
-                error_message += f"    {code_lines[error_line - 1].strip()}\n"
-            error_message += f"{type(exec_error).__name__}: {str(exec_error)}"
-            if stderr_capture.getvalue():
-                error_message += f"\n{stderr_capture.getvalue()}"
-            return f"[Error]:\n{error_message.strip()}"
 
     def _chat_with_retry(
         self,
@@ -300,7 +336,7 @@ class DeepAnalyzeLangGraph:
             return state
 
         self._log_event("executor", "execution_start", round_idx=state["round_idx"])
-        exe_output = self.execute_code(code_str)
+        exe_output = self.execute_code(code_str, state["workspace"])
         state["last_execution_output"] = exe_output
         state["response_chunks"].append(f"<Execute>\n{exe_output}\n</Execute>")
         state["messages"].append({"role": "execute", "content": exe_output})
@@ -415,10 +451,9 @@ class DeepAnalyzeLangGraph:
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
     ) -> Dict[str, str]:
-        """运行一次完整的 LangGraph 分析流程，并返回 reasoning 与报告路径。"""
-        original_cwd = os.getcwd()
-        os.makedirs(workspace, exist_ok=True)
-        os.chdir(workspace)
+        """??????? LangGraph ???????? reasoning ??????"""
+        workspace_abs = os.path.abspath(workspace)
+        os.makedirs(workspace_abs, exist_ok=True)
         self._log_event("runtime", "run_start")
 
         state: AgentState = {
@@ -437,6 +472,7 @@ class DeepAnalyzeLangGraph:
             "last_execution_output": "",
             "consecutive_exec_failures": 0,
             "max_exec_retries": self.max_exec_retries,
+            "workspace": workspace_abs,
         }
 
         try:
@@ -445,8 +481,8 @@ class DeepAnalyzeLangGraph:
             report_body = final_state.get("final_answer", "").strip()
             if not report_body:
                 report_body = self._sanitize_report_text(self._extract_answer(reasoning).strip() or reasoning)
-            report_md = f"# 分析报告\n\n{report_body}\n"
-            report_path = self._save_report_markdown(workspace, report_md)
+            report_md = f"# ????\n\n{report_body}\n"
+            report_path = self._save_report_markdown(workspace_abs, report_md)
             self._log_event(
                 "runtime",
                 "run_end",
@@ -457,13 +493,12 @@ class DeepAnalyzeLangGraph:
         except Exception as err:  # noqa: BLE001
             self._log_event("runtime", "run_crashed", error=str(err))
             reasoning = "\n".join(state["response_chunks"])
-            report_md = f"# 分析报告（异常中断）\n\n{reasoning}\n"
-            report_path = self._save_report_markdown(workspace, report_md)
-        finally:
-            os.chdir(original_cwd)
+            report_md = f"# ??????????\n\n{reasoning}\n"
+            report_path = self._save_report_markdown(workspace_abs, report_md)
 
         return {"reasoning": reasoning, "report_path": report_path}
 
 
 # 向后兼容旧名称
 DeepAnalyzeVLLM = DeepAnalyzeLangGraph
+

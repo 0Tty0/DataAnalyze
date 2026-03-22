@@ -27,10 +27,11 @@ load_dotenv()
 API_TITLE = "DataAnalyze Service"
 API_VERSION = "1.0.0"
 WORKSPACE_ROOT = os.getenv("WORKSPACE", "./workspace")
+DB_PATH = os.getenv("DB_PATH", os.path.join(WORKSPACE_ROOT, "storage.db"))
 WEB_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "web"))
 DEFAULT_MODEL = os.getenv("MODEL_NAME", "gpt-4.1-mini")
 
-storage = Storage(workspace_root=WORKSPACE_ROOT)
+storage = Storage(workspace_root=WORKSPACE_ROOT, db_path=DB_PATH)
 
 
 def _normalize_content(content: Any) -> str:
@@ -325,4 +326,5 @@ def list_thread_messages(thread_id: str, limit: int = 100, owner_id: str | None 
         raise HTTPException(status_code=404, detail="Thread not found")
     rows = storage.list_thread_messages(thread_id=thread_id, limit=limit)
     return {"object": "list", "data": rows}
+
 

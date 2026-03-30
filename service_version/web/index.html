@@ -569,7 +569,7 @@
         $("chatbox").innerHTML = "";
         $("historyConversation").innerHTML = "";
         $("reportList").innerHTML = "";
-        $("reportPreview").textContent = "???????????";
+        $("reportPreview").textContent = "请选择左侧报告进行预览";
         await refreshSessions();
       }
     });
@@ -678,7 +678,7 @@
       saveFileState();
       renderFileIds();
       $("chatbox").innerHTML = "";
-      setStatus($("chatStatus"), "?????????????????");
+      setStatus($("chatStatus"), "已切换到新会话，请重新上传本会话需要的文件。");
       refreshSessions();
       refreshReports();
     });

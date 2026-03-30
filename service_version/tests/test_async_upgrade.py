@@ -20,3 +20,36 @@ class AsyncUpgradeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AsyncGraphInvokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agenerate_uses_graph_ainvoke(self) -> None:
+        agent = DeepAnalyzeLangGraph.__new__(DeepAnalyzeLangGraph)
+        agent.max_rounds = 3
+        agent.max_exec_retries = 2
+        agent._log_event = lambda *args, **kwargs: None
+        agent._sanitize_report_text = lambda text: text
+        agent._extract_answer = lambda text: "????"
+        agent._save_report_markdown = lambda workspace, content: str(Path(workspace) / "report.md")
+
+        class FakeGraph:
+            def __init__(self) -> None:
+                self.called = False
+
+            async def ainvoke(self, state, config=None):
+                self.called = True
+                return {
+                    **state,
+                    "response_chunks": ["<Answer>????</Answer>"],
+                    "final_answer": "????",
+                    "round_idx": 1,
+                    "finished": True,
+                }
+
+        agent.graph = FakeGraph()
+        workspace = Path(__file__).resolve().parent / "_tmp_async_graph"
+        workspace.mkdir(parents=True, exist_ok=True)
+        result = await DeepAnalyzeLangGraph.agenerate(agent, "????", str(workspace))
+        self.assertTrue(agent.graph.called)
+        self.assertIn("reasoning", result)
+        self.assertIn("report_path", result)

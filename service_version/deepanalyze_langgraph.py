@@ -97,14 +97,14 @@ class DeepAnalyzeLangGraph:
     def _build_async_client(self, api_base: Optional[str], api_key: Optional[str]) -> AsyncOpenAI:
         key = api_key or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
         if not key:
-            raise ValueError("???? API Key???? API_KEY ? OPENAI_API_KEY?")
+            raise ValueError("需要提供 API Key，请设置 API_KEY 或 OPENAI_API_KEY。")
         base = api_base or os.getenv("API_BASE")
         if base:
             return AsyncOpenAI(base_url=base, api_key=key, timeout=self.request_timeout)
         return AsyncOpenAI(api_key=key, timeout=self.request_timeout)
 
     def _subprocess_limits(self) -> Dict[str, Any]:
-        """? POSIX ????????????Windows ??????"""
+        """仅在 POSIX 系统下设置资源限制；Windows 平台直接跳过。"""
         kwargs: Dict[str, Any] = {}
         if os.name != "posix":
             return kwargs
@@ -125,7 +125,7 @@ class DeepAnalyzeLangGraph:
         return kwargs
 
     def execute_code(self, code_str: str, workspace: str) -> str:
-        """?????????????? stdout/stderr?"""
+        """在受控子进程中执行代码，并返回合并后的 stdout/stderr。"""
         os.makedirs(workspace, exist_ok=True)
         tmp_path = ""
 
@@ -301,7 +301,7 @@ class DeepAnalyzeLangGraph:
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
-        # ?????????????? 4 ??? 1 token?
+        # 使用粗略估算：约 4 个字符折合 1 个 token
         return max(1, len(str(text or "")) // 4)
 
     def _estimate_messages_tokens(self, messages: List[Dict[str, str]]) -> int:
@@ -334,9 +334,9 @@ class DeepAnalyzeLangGraph:
             {
                 "role": "system",
                 "content": (
-                    "??????????????????????????????"
-                    "??????????????????????????"
-                    "??????????????"
+                    "你是上下文压缩助手。请在不丢失关键事实、结论、错误信息和待办事项的前提下，"
+                    "把输入历史压缩为精炼中文摘要。"
+                    "禁止补充原文没有的信息。"
                 ),
             },
             {"role": "user", "content": raw_text},
@@ -383,7 +383,7 @@ class DeepAnalyzeLangGraph:
             compressed.extend(system_msgs[-2:])
         compressed.extend(anchor)
         if middle_summary:
-            compressed.append({"role": "user", "content": f"[????]\n{middle_summary}"})
+            compressed.append({"role": "user", "content": f"[历史摘要]\n{middle_summary}"})
         compressed.extend(recent)
 
         while self._estimate_messages_tokens(compressed) > budget and len(recent) > 2:
@@ -393,7 +393,7 @@ class DeepAnalyzeLangGraph:
                 compressed.extend(system_msgs[-2:])
             compressed.extend(anchor)
             if middle_summary:
-                compressed.append({"role": "user", "content": f"[????]\n{middle_summary}"})
+                compressed.append({"role": "user", "content": f"[历史摘要]\n{middle_summary}"})
             compressed.extend(recent)
 
         self._log_event(
@@ -632,7 +632,7 @@ class DeepAnalyzeLangGraph:
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
     ) -> Dict[str, str]:
-        """??????? AsyncOpenAI????? Web worker?"""
+        """异步执行 LangGraph 工作流，返回完整推理文本与报告路径。"""
         workspace_abs = os.path.abspath(workspace)
         os.makedirs(workspace_abs, exist_ok=True)
         self._log_event("runtime", "run_start_async")
@@ -657,129 +657,28 @@ class DeepAnalyzeLangGraph:
         }
 
         try:
-            while (not state["finished"]) and (state["round_idx"] < state["max_rounds"]):
-                planning_context = (
-                    f"Task:\n{state['messages'][0]['content']}\n\n"
-                    f"Last execution output:\n{state['last_execution_output'] or 'none'}\n\n"
-                    f"Round: {state['round_idx']} / {state['max_rounds']}"
-                )
-                planning_messages: List[Dict[str, str]] = [
-                    {
-                        "role": "system",
-                        "content": "????????????????????????????????????????????????????????????",
-                    },
-                    {"role": "user", "content": planning_context},
-                ]
-                plan = (
-                    await self._achat_with_retry(
-                        planning_messages,
-                        state["temperature"],
-                        min(state["max_tokens"], 512),
-                        state["top_p"],
-                        state["top_k"],
-                        stop=None,
-                        node="planner",
-                    )
-                ).strip()
-                state["plan_text"] = plan
-                state["response_chunks"].append(f"<Plan>\n{plan}\n</Plan>")
-
-                coder_messages: List[Dict[str, str]] = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "???????????? DeepAnalyze ???????????? <Analyze>...</Analyze>?"
-                            "????????? <Code>...</Code> ?????? Python?????? <Answer>...</Answer> ???????????????"
-                            "<Answer> ?????????????????????? xx??????????????????????????"
-                        ),
-                    },
-                    {"role": "system", "content": f"Current plan:\n{state['plan_text']}"},
-                ]
-                if state["last_execution_output"]:
-                    coder_messages.append({"role": "system", "content": f"Last execution output:\n{state['last_execution_output']}"})
-                coder_messages.extend(self._compress_messages_for_coder(state))
-
-                ans = await self._achat_with_retry(
-                    coder_messages,
-                    state["temperature"],
-                    state["max_tokens"],
-                    state["top_p"],
-                    state["top_k"],
-                    stop=["</Code>"],
-                    node="coder",
-                )
-                if ans.count("<Code>") > ans.count("</Code>"):
-                    ans += "</Code>"
-
-                state["response_chunks"].append(ans)
-                state["messages"].append({"role": "assistant", "content": ans})
-                state["round_idx"] += 1
-                state["pending_code"] = self._extract_code(ans)
-
-                answer_text = self._extract_answer(ans)
-                if answer_text:
-                    state["final_answer"] = self._sanitize_report_text(answer_text)
-                    state["finished"] = True
-                    state["pending_code"] = None
-                    break
-
-                code_str = state.get("pending_code")
-                if not code_str:
-                    continue
-
-                exe_output = await asyncio.to_thread(self.execute_code, code_str, state["workspace"])
-                state["last_execution_output"] = exe_output
-                state["response_chunks"].append(f"<Execute>\n{exe_output}\n</Execute>")
-                state["messages"].append({"role": "execute", "content": exe_output})
-                state["pending_code"] = None
-
-                if exe_output.startswith("[Error]:") or exe_output.startswith("[Timeout]:"):
-                    state["consecutive_exec_failures"] += 1
-                    if state["consecutive_exec_failures"] > state["max_exec_retries"]:
-                        break
-                else:
-                    state["consecutive_exec_failures"] = 0
-
-            if not state["final_answer"]:
-                reporter_messages: List[Dict[str, str]] = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "????????????????????????????????????????"
-                            "?????? <Answer>...</Answer> ???????"
-                        ),
-                    },
-                    {"role": "user", "content": self._build_reporter_context(state["response_chunks"])},
-                ]
-                report = (
-                    await self._achat_with_retry(
-                        reporter_messages,
-                        state["temperature"],
-                        min(state["max_tokens"], 1024),
-                        state["top_p"],
-                        state["top_k"],
-                        stop=None,
-                        node="reporter",
-                    )
-                ).strip()
-                if "<Answer>" not in report:
-                    report = f"<Answer>\n{report}\n</Answer>"
-                state["response_chunks"].append(report)
-                state["final_answer"] = self._sanitize_report_text(self._extract_answer(report))
-
-            reasoning = "\n".join(state["response_chunks"])
-            report_body = state.get("final_answer", "").strip()
+            final_state = await self.graph.ainvoke(
+                state,
+                config={"recursion_limit": max(200, self.max_rounds * 8)},
+            )
+            reasoning = "\n".join(final_state["response_chunks"])
+            report_body = final_state.get("final_answer", "").strip()
             if not report_body:
                 report_body = self._sanitize_report_text(self._extract_answer(reasoning).strip() or reasoning)
-            report_md = f"# ????\n\n{report_body}\n"
+            report_md = f"# 分析报告\n\n{report_body}\n"
             report_path = self._save_report_markdown(workspace_abs, report_md)
-            self._log_event("runtime", "run_end_async", rounds=state["round_idx"], finished=state["finished"], report_path=report_path)
+            self._log_event(
+                "runtime",
+                "run_end_async",
+                rounds=final_state["round_idx"],
+                finished=final_state["finished"],
+                report_path=report_path,
+            )
             return {"reasoning": reasoning, "report_path": report_path}
-
         except Exception as err:  # noqa: BLE001
             self._log_event("runtime", "run_crashed_async", error=str(err))
             reasoning = "\n".join(state["response_chunks"])
-            report_md = f"# ??????\n\n{reasoning}\n"
+            report_md = f"# 异常回退报告\n\n{reasoning}\n"
             report_path = self._save_report_markdown(workspace_abs, report_md)
             return {"reasoning": reasoning, "report_path": report_path}
 
@@ -792,7 +691,7 @@ class DeepAnalyzeLangGraph:
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
     ) -> Dict[str, str]:
-        """??????? LangGraph ???????? reasoning ??????"""
+        """同步执行 LangGraph 工作流，返回完整推理文本与报告路径。"""
         workspace_abs = os.path.abspath(workspace)
         os.makedirs(workspace_abs, exist_ok=True)
         self._log_event("runtime", "run_start")
@@ -822,7 +721,7 @@ class DeepAnalyzeLangGraph:
             report_body = final_state.get("final_answer", "").strip()
             if not report_body:
                 report_body = self._sanitize_report_text(self._extract_answer(reasoning).strip() or reasoning)
-            report_md = f"# ????\n\n{report_body}\n"
+            report_md = f"# 分析报告\n\n{report_body}\n"
             report_path = self._save_report_markdown(workspace_abs, report_md)
             self._log_event(
                 "runtime",
@@ -834,7 +733,7 @@ class DeepAnalyzeLangGraph:
         except Exception as err:  # noqa: BLE001
             self._log_event("runtime", "run_crashed", error=str(err))
             reasoning = "\n".join(state["response_chunks"])
-            report_md = f"# ??????????\n\n{reasoning}\n"
+            report_md = f"# 异常回退报告\n\n{reasoning}\n"
             report_path = self._save_report_markdown(workspace_abs, report_md)
 
         return {"reasoning": reasoning, "report_path": report_path}
@@ -842,4 +741,6 @@ class DeepAnalyzeLangGraph:
 
 # 向后兼容旧名称
 DeepAnalyzeVLLM = DeepAnalyzeLangGraph
+
+
 
